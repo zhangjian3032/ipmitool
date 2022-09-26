@@ -2364,6 +2364,73 @@ __ipmi_sel_savelist_entries(struct ipmi_intf * intf, int count, const char * sav
 	return 0;
 }
 
+void oem_sel_decode_from_ami_sel_dat(struct ipmi_intf * intf, const char* file)
+{
+#pragma pack(1)
+#define SIGN_SIZE 4
+	typedef struct oem_sel_entry
+	{
+		uint8_t vaild;
+		uint8_t len;
+		struct sel_event_record evt;
+	} oem_sel_entry;
+
+	typedef struct
+	{
+		uint8_t signature[SIGN_SIZE];
+		uint16_t num_records;
+		uint16_t padding;
+		uint32_t add_timestamp;
+		uint32_t erase_timestamp;
+		uint32_t rsvd;
+	} sel_repository_t;
+#pragma pack(0)
+	// open file
+	FILE* fp = ipmi_open_file(file, 0);
+	if (fp == NULL)
+	{
+		lprintf(LOG_ERR, "Error open: %s\n", file);
+		return;
+	}
+
+	sel_repository_t sel_repo;
+	sel_extended = 1;
+
+	// skip the header
+	if (fread(&sel_repo, 1, sizeof(sel_repository_t), fp) != sizeof(sel_repository_t))
+	{
+		lprintf(LOG_ERR, "Error read: %s\n", file);
+		return;
+	}
+	oem_sel_entry entry;
+
+	size_t bytesRead = 0;
+	do
+	{
+		if ((bytesRead = fread(&entry, 1, 18, fp)) == 18)
+		{
+			if (entry.vaild != 0x5a || entry.len != 0x12)
+			{
+				return;
+			}
+			ipmi_sel_print_std_entry(intf, &entry.evt);
+		}
+		else
+		{
+			if (bytesRead != 0)
+			{
+				lprintf(LOG_ERR, "ipmitool: incomplete record found in file.");
+			}
+
+			break;
+		}
+
+	} while (1);
+	fclose(fp);
+
+	return;
+}
+
 static int
 ipmi_sel_list_entries(struct ipmi_intf * intf, int count)
 {
@@ -3052,6 +3119,15 @@ int ipmi_sel_main(struct ipmi_intf * intf, int argc, char ** argv)
 		}
 		sel_extended = 1;
 		rc = ipmi_sel_readraw(intf, argv[1]);
+	}
+	else if (!strcmp(argv[0], "decode"))
+	{
+		if (argc < 2)
+		{
+			lprintf(LOG_NOTICE, "usage: sel decode <filename>");
+			return 0;
+		}
+		oem_sel_decode_from_ami_sel_dat(intf, argv[1]);
 	}
 	else if (!strcmp(argv[0], "list")
 	         || !strcmp(argv[0], "elist"))
